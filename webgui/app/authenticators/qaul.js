@@ -1,43 +1,51 @@
 import Base from 'ember-simple-auth/authenticators/base';
+import { inject as service } from '@ember/service';
 
 export default class QaulAuthenticator extends Base {
+  @service backend;
+
   restore(data) {
     return data;
   }
 
-  async authenticate(userId, password) {
-    const grantResponse = await fetch('/api/grants', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/vnd.api+json' },
-      body: JSON.stringify({
-          data: {
-            type: 'grant',
-            attributes: {
-              secret: password
-            },
-            relationships: {
-              user: {
-                data: {
-                  type: 'user',
-                  id: userId
-                }
-              }
-            }
-          }
-        })
+  async authenticate(user, password) {
+    return await this.backend.request('users', 'login', {
+      pw: password,
+      user,
     });
 
-    if(grantResponse.status !== 201) {
-      throw "can not create grant";
-    }
+    // const grantResponse = await fetch('/api/grants', {
+    //   method: 'POST',
+    //   headers: { 'Content-Type': 'application/vnd.api+json' },
+    //   body: JSON.stringify({
+    //       data: {
+    //         type: 'grant',
+    //         attributes: {
+    //           secret: password
+    //         },
+    //         relationships: {
+    //           user: {
+    //             data: {
+    //               type: 'user',
+    //               id: userId
+    //             }
+    //           }
+    //         }
+    //       }
+    //     })
+    // });
 
-    const grantData = await grantResponse.json();
-    const token = grantData.data.id;
+    // if(grantResponse.status !== 201) {
+    //   throw "can not create grant";
+    // }
 
-    return {
-      token,
-      userId,
-    };
+    // const grantData = await grantResponse.json();
+    // const token = grantData.data.id;
+
+    // return {
+    //   token,
+    //   userId,
+    // };
   }
 
   async invalidate({ token }) {
