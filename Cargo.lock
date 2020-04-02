@@ -1588,6 +1588,8 @@ dependencies = [
  "ratman-identity 0.4.0",
  "ratman-netmod 0.3.0",
  "serde 1.0.105 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tracing 0.1.13 (registry+https://github.com/rust-lang/crates.io-index)",
+ "tracing-futures 0.2.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "twox-hash 1.5.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
