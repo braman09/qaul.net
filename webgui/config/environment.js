@@ -52,7 +52,7 @@ module.exports = function(environment) {
   };
 
   ENV['moment'] = {
-    includeLocales: ['en', 'de', 'ar'],
+    includeLocales: ['en-US', 'de-DE', 'ar-SY'],
   };
 
   ENV.factoryGuy = { useScenarios: true };
