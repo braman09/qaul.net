@@ -1,0 +1,18 @@
+digraph {
+    "R.A.T.M.A.N." -> identity
+    "R.A.T.M.A.N." -> netmod
+    "R.A.T.M.A.N." -> diagnostics
+    "R.A.T.M.A.N." -> "routing-core"
+    "R.A.T.M.A.N." -> persistence
+
+    netmod -> identity
+    diagnostics -> identity
+    "routing-core" -> identity
+
+    libqaul -> "R.A.T.M.A.N."
+    libqaul -> platform
+    libqaul -> "qaul-service"
+    libqaul -> identity
+
+    "qaul-http" -> libqaul
+}
