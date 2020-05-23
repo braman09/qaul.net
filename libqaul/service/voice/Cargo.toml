@@ -1,5 +1,5 @@
 [package]
-name = "qaul-voices"
+name = "qaul-voice"
 version = "0.1.0"
 authors = ["Jess 3Jane <me@jess.coffee>"]
 edition = "2018"
@@ -15,4 +15,11 @@ serde = { version = "1.0", features = ["derive"] }
 futures = "0.3"
 failure = "0.1"
 conjoiner = { version = "1.2", package = "conjoiner-engine" }
-# opus = "0.2"
+opus = "0.2"
+tracing = "0.1"
+tracing-futures = "0.2"
+
+[dev-dependencies]
+tracing-subscriber = "0.2"
+ratman-harness = { path = "../../../ratman/harness" }
+tempfile = "3.0"

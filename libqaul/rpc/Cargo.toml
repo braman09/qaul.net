@@ -10,11 +10,11 @@ default = ["proto", "json", "chat"]
 proto = ["capnp"]
 json = ["serde_json"]
 chat = ["qaul-chat"]
-voices = ["qaul-voices"]
+voices = ["qaul-voice"]
 
 [dependencies]
 qaul-chat = { path = "../service/chat", optional = true }
-qaul-voices = { path = "../service/voices", optional = true }
+qaul-voice = { path = "../service/voice", optional = true }
 
 libqaul = { version = "*", path = ".." }
 capnp = { version = "0.12", optional = true }
