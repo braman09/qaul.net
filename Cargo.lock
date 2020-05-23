@@ -1308,6 +1308,7 @@ dependencies = [
  "libqaul",
  "netmod-wd",
  "ratman",
+ "ratman-configure",
 ]
 
 [[package]]
