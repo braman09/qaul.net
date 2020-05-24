@@ -17,20 +17,28 @@ pub type CallId = Identity;
 #[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize)]
 pub struct Call {
     pub id: CallId,
+    /// Who has joined the call?
     pub participants: BTreeSet<Identity>, 
+    /// Who has been invited to the call?
     pub invitees: BTreeSet<Identity>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub(crate) enum CallMessage {
+    /// invite a user
     Invitation(CallInvitation),
+    /// note that you have invited a user
     InvitationSent(Identity),
+    /// join a call
     Join,
+    /// leave a call
     Part,
+    /// send some data to the call
     Data(CallData),
 }
 
 impl CallMessage {
+    /// send to a group of users
     pub(crate) async fn send_to(
         &self, 
         user: UserAuth, 
@@ -59,6 +67,7 @@ impl CallMessage {
         Ok(())
     }
 
+    /// send to a specific user
     pub(crate) async fn send(
         &self, 
         user: UserAuth, 
@@ -79,11 +88,6 @@ impl CallMessage {
             .await?;
 
         Ok(())
-    }
-
-    pub(crate) fn from_payload(message: &Message) -> Result<Self> {
-        let this = conjoiner::deserialise(&message.payload)?;
-        Ok(this)
     }
 }
 
