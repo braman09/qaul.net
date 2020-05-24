@@ -12,6 +12,7 @@ use {
     std::sync::Arc,
 };
 
+/// A wrapper struct wrapping interactions with Alexandria 
 pub(crate) struct CallDirectory {
     qaul: Arc<Qaul>,
 }
@@ -31,6 +32,7 @@ impl CallDirectory {
             .unwrap_or_else(|| MetadataMap::new(tags::CALL_LIST)))
     }
 
+    /// get every call the user knows about
     pub(crate) async fn get_all(&self, user: UserAuth) -> Result<Vec<Call>> {
         Ok(self.get_inner(user)
             .await?
@@ -39,6 +41,7 @@ impl CallDirectory {
             .collect())
     }
 
+    /// get a specific call the user knows about
     pub(crate) async fn get(&self, user: UserAuth, id: CallId) -> Result<Call> {
         self.get_inner(user)
             .await?
@@ -54,6 +57,7 @@ impl CallDirectory {
             })
     }
 
+    /// insert a new call into the database
     pub(crate) async fn insert(&self, user: UserAuth, call: &Call) -> Result<()> {
         self.qaul
             .services()
@@ -70,6 +74,7 @@ impl CallDirectory {
         Ok(())
     }
 
+    /// update a call with a function, returning the updated call
     pub(crate) async fn update<F>(&self, user: UserAuth, id: CallId, f: F) -> Result<Call> 
     where
         F: FnOnce(Call) -> Call

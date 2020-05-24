@@ -4,6 +4,7 @@ use {
     std::fmt::{Display, Formatter, Result},
 };
 
+/// The call database contains no call with the given id
 #[derive(Debug)]
 pub struct NoSuchCall(pub CallId);
 
