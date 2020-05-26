@@ -1,18 +1,26 @@
 use {
-    async_std::sync::RwLock,
+    async_std::sync::{Mutex, RwLock},
     conjoiner,
     crate::{ASC_NAME, Result, tags, InvitationSubscription},
-    futures::channel::mpsc::Sender,
+    futures::{
+        channel::mpsc::Sender,
+        future::AbortHandle,
+    },
     libqaul::{
         messages::{Mode, Message},
         users::UserAuth,
         Identity, Qaul,
     },
+    opus::Decoder,
     serde::{Serialize, Deserialize},
-    std::collections::{BTreeSet, BTreeMap},
+    std::{
+        collections::{BTreeSet, BTreeMap},
+        time::Instant,
+    },
 };
 
 pub type CallId = Identity;
+pub type StreamId = Identity;
 
 #[derive(Eq, PartialEq, Clone, Debug, Serialize, Deserialize)]
 pub struct Call {
@@ -99,8 +107,10 @@ pub(crate) struct CallInvitation {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub(crate) struct CallData {
+    pub(crate) stream: StreamId,
     pub(crate) data: Vec<u8>,
-    pub(crate) sequence_number: u64,
+    pub(crate) sequence_number: u32,
+    pub(crate) sample_rate: u32,
 }
 
 #[derive(Eq, PartialEq, Clone, Serialize, Deserialize, Debug)]
@@ -110,8 +120,57 @@ pub enum CallEvent {
     UserParted(Identity),
 }
 
+/// 20ms of audio data for all incoming streams indexed by stream id
+pub type VoiceData = BTreeMap<StreamId, VoiceDataPacket>;
+
+/// An individal audio packet from a stream
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct VoiceDataPacket {
+    /// What user sent this packet?
+    pub user: Identity,
+    /// The audio samples
+    pub samples: Vec<f32>,
+    /// The audio sample rate (this should never change within a given stream)
+    pub sample_rate: u32,
+}
+
 pub(crate) struct CallUser {
     pub(crate) auth: UserAuth,
     pub(crate) invitation_subs: RwLock<Vec<Sender<Call>>>,
     pub(crate) call_event_subs: RwLock<BTreeMap<CallId, Vec<Sender<CallEvent>>>>,
+    pub(crate) stream_subs: RwLock<BTreeMap<CallId, Vec<Sender<VoiceData>>>>,
+    pub(crate) incoming_streams: RwLock<BTreeMap<StreamId, StreamState>>,
+    pub(crate) abort_handles: Vec<AbortHandle>,
+}
+
+pub(crate) struct StreamState {
+    /// what call does this stream belong to?
+    pub(crate) call: CallId,
+    /// and what user is sending it?
+    pub(crate) user: Identity, 
+    /// a buffer of packets indexed by sequence numbers
+    ///
+    /// this is where new incoming packets are stored to allow
+    /// them to come in in a different order than they were sent
+    pub(crate) jitter_buffer: BTreeMap<u32, Vec<u8>>,
+    /// the sequence number of the next packet to be decoded
+    pub(crate) next_sequence_number: u32,
+    /// an instant representing when the stream will go live
+    ///
+    /// when the stream starts it delays before decoding packets
+    /// to allow for the jitter buffer to fill up
+    pub(crate) startup_timeout: Option<Instant>,
+    /// an instant representing when the stream will shutdown
+    ///
+    /// this field will be set when the decoder tries to decode a 
+    /// packet and can't find one. it will be cleared if a packet is
+    /// found but if the timer is allowed to expire the stream will be
+    /// flushed from memory.
+    pub(crate) shutdown_timeout: Option<Instant>,
+    /// the decoder that does the actual work of decoding packets
+    ///
+    /// behind a mutex because it is not `Send`
+    pub(crate) decoder: Mutex<Decoder>,
+    /// the sample rate of the stream's audio
+    pub(crate) sample_rate: u32,
 }

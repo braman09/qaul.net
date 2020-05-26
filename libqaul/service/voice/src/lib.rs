@@ -10,11 +10,11 @@ mod worker;
 
 pub use self::{
     error::Result,
-    subs::{InvitationSubscription, CallEventSubscription},
-    types::{Call, CallId, CallEvent},
+    subs::{InvitationSubscription, CallEventSubscription, VoiceSubscription},
+    types::{Call, CallId, CallEvent, VoiceData, VoiceDataPacket},
 };
 pub(crate) use self::{
-    types::{CallMessage, CallInvitation, CallUser},
+    types::{CallMessage, CallInvitation, CallUser, StreamState},
 };
 use {
     async_std::{
@@ -81,31 +81,41 @@ impl Voice {
         //
         // TODO: is this per-client or per-login...
         // if it's per-login we have to be more careful in the future
-        let client_message_handles = SyncMutex::new(BTreeMap::new());
         let _this = this.clone();
         this.qaul
             .services()
             .register(ASC_NAME, move |cmd| match cmd {
                 // when a client logs in...
                 ServiceEvent::Open(auth) => {
-                    // start up a worker
-                    let (fut, handle) = abortable(worker::client_message_worker(
-                        auth.clone(), 
+                    let (fut_1, handle_1) = abortable(worker::client_message_worker(
+                        auth.0,
                         _this.clone(),
-                        auth.0, //this field is just to add what we want to instrument
                     ));
-                    task::spawn(fut);
 
-                    // and keep track of the abort handle for later
-                    client_message_handles.lock().unwrap().insert(auth.0, handle);
+                    let (fut_2, handle_2) = abortable(worker::voice_worker(
+                        auth.0,
+                        _this.clone(),
+                    ));
+
+                    let user = Arc::new(CallUser {
+                        auth,
+                        invitation_subs: RwLock::new(Vec::new()),
+                        call_event_subs: RwLock::new(BTreeMap::new()),
+                        stream_subs: RwLock::new(BTreeMap::new()),
+                        incoming_streams: RwLock::new(BTreeMap::new()),
+                        abort_handles: vec![handle_1, handle_2],
+                    });
+                    task::block_on(_this.users.write()).insert(user.auth.0, Arc::clone(&user));
+
+                    task::spawn(fut_1);
+                    task::spawn(fut_2);
                 },
                 // when a client logs out...
                 ServiceEvent::Close(auth) => {
-                    // remove the user from the user map
-                    task::block_on(_this.users.write()).remove(&auth.0);
-                    // and then abort the worker
-                    if let Some(handle) = client_message_handles.lock().unwrap().remove(&auth.0) {
-                        handle.abort();
+                    if let Some(user) = task::block_on(_this.users.write()).remove(&auth.0) {
+                        for handle in &user.abort_handles {
+                            handle.abort();
+                        }
                     }
                 },
             })
@@ -210,8 +220,6 @@ impl Voice {
     /// NOTE: This will not notify you about the creation of your own calls, only
     /// external invites
     pub async fn subscribe_invites(&self, user: UserAuth) -> Result<InvitationSubscription> {
-        // if the worker hasn't added the user we'll error because there's not much else we
-        // can do
         let user = self.users.read().await.get(&user.0).ok_or(QaulError::NoUser)?.clone();
 
         // make the channel and add the sender to the user's subscription list
@@ -229,14 +237,29 @@ impl Voice {
     /// caused by external users
     pub async fn subscribe_call_events(&self, user: UserAuth, id: CallId) 
     -> Result<CallEventSubscription> {
-        // if the worker hasn't added the user we'll error because there's not much else we
-        // can do
         let user = self.users.read().await.get(&user.0).ok_or(QaulError::NoUser)?.clone();
 
         // make the channel and add it to the call's subscription list
         // if the call doesn't have one, make a new subscription list for this call
         let (sender, receiver) = channel(1);
         let mut subs = user.call_event_subs.write().await;
+        if let Some(mut v) = subs.get_mut(&id) {
+            v.push(sender); 
+        } else {
+            subs.insert(id, vec![sender]);
+        }
+
+        Ok(receiver)
+    }
+
+    pub async fn subscribe_call_audio(&self, user: UserAuth, id: CallId)
+    -> Result<VoiceSubscription> {
+        let user = self.users.read().await.get(&user.0).ok_or(QaulError::NoUser)?.clone();
+
+        // make the channel and add it to the call's subscription list
+        // if the call doesn't have one, make a new subscription list for this call
+        let (sender, receiver) = channel(1);
+        let mut subs = user.stream_subs.write().await;
         if let Some(mut v) = subs.get_mut(&id) {
             v.push(sender); 
         } else {
