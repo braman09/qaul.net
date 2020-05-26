@@ -13,7 +13,7 @@ use bincode::{deserialize, serialize};
 use byteorder::{BigEndian, ByteOrder};
 use netmod::Frame;
 use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
-use tracing::{debug, error};
+use tracing::{debug, error, info, warn};
 
 /// A wrapper around tcp socket logic
 pub(crate) struct Socket {
@@ -80,13 +80,28 @@ impl Socket {
                     break;
                 }
 
-                debug!("{}, Attempting connection to peer '{}'", pre, ip.to_string());
+                debug!(
+                    "{}, Attempting connection to peer '{}'",
+                    pre,
+                    ip.to_string()
+                );
                 let mut s = match TcpStream::connect(ip).await {
-                    Ok(s) => { debug!("Successfully connected to peer '{}'", ip.to_string()); s },
+                    Ok(s) => {
+                        debug!("Successfully connected to peer '{}'", ip.to_string());
+                        s
+                    }
                     Err(e) => {
-                        error!("Failed to connect to peer '{}': {}", ip.to_string(), e.to_string());
+                        error!(
+                            "Failed to connect to peer '{}': {}",
+                            ip.to_string(),
+                            e.to_string()
+                        );
                         task::sleep(Duration::from_secs(30)).await;
-                        debug!("Retry timeout expired for peer '{}', proceeding with retry {}", ip.to_string(), ctr);
+                        debug!(
+                            "Retry timeout expired for peer '{}', proceeding with retry {}",
+                            ip.to_string(),
+                            ctr
+                        );
                         continue;
                     }
                 };
@@ -125,106 +140,165 @@ impl Socket {
     async fn run(tx: Sender<(Frame, usize)>, mode: Mode, socket: Arc<Self>, peers: Arc<PeerList>) {
         let mut inc = socket.inner.incoming();
 
-        println!(
+        debug!(
             "{} Listening for: {:?}",
             socket.id,
             socket.inner.local_addr()
         );
         while let Some(Ok(mut stream)) = inc.next().await {
-            loop {
-                let addr = match stream.peer_addr() {
-                    Ok(a) => a,
-                    Err(_) => continue,
-                };
+            task::spawn(handle_incoming_stream(socket.clone(), stream, mode, peers.clone(), tx.clone()));
+        }
 
-                // Drop unknown connections
-                let state = peers.peer_state(&addr).await;
-                if state == PeerState::Unknown && !mode.dynamic() {
-                    println!(
-                        "{} Connection from unknown peer `{}`, closing!",
-                        socket.id, addr
+        debug!("{} Exited listen loop!", socket.id);
+    }
+}
+
+async fn handle_incoming_stream(socket: Arc<Socket>, mut stream: TcpStream, mode: Mode, peers: Arc<PeerList>, tx: Sender<(Frame, usize)>) -> () {
+    let src_addr = match stream.peer_addr() {
+        Ok(a) => a,
+        Err(_) => return,
+    };
+
+    // Drop unknown connections
+    let state = peers.peer_state(&src_addr).await;
+    if state == PeerState::Unknown && !mode.dynamic() {
+        warn!(
+            "Connection from unknown peer '{}' on socket '{}', closing!",
+            src_addr, socket.id
+        );
+        return;
+    }
+
+    loop {
+        // Try to read a packet
+        let mut fb = PacketBuilder::new(&mut stream);
+        if let Err(e) = fb.parse().await {
+            use std::io::ErrorKind::*;
+            match e.kind() {
+                UnexpectedEof => {
+                    use PeerState::*;
+                    error!(
+                        "Stream is at end of file, lost communication with '{}'.",
+                        src_addr
+                    );
+                    match state {
+                        Valid | Unverified => {
+                           match peers.get_id_by_src(&src_addr).await {
+                               Some(id) => { peers.clone().del_peer(id).await; },
+                               None => { warn!("Peer '{}' marked as Valid or Unverified had no record by source address.", src_addr); }
+                           }
+                        },
+                        PeerState::Unknown => warn!(
+                            "Connection from unknown peer '{}' dropped. We don't care, bye!",
+                            src_addr
+                        ),
+                    }
+                    break;
+                }
+                _ => {
+                    error!(
+                        "Failed to parse incoming message, dropping connection with '{}': {:?}",
+                        src_addr,
+                        e
                     );
                     break;
                 }
-
-                // Try to read a packet
-                let mut fb = PacketBuilder::new(&mut stream);
-                if let Err(e) = fb.parse().await {
-                    error!("Failed to parse incoming message: {:?}... dropping connection", e);
-                    break;
-                }
-
-                let f = fb.build().unwrap();
-
-                println!("{} Full packet `{:?}` received!", socket.id, f);
-
-                // Disambiguate differente packet types
-                match (f, state) {
-                    // Forward to inbox
-                    (Packet::Frame(f), PeerState::Valid) => {
-                        let id = peers.get_id_by_src(&addr).await.unwrap();
-                        tx.send((f, id)).await;
-                    }
-                    (Packet::Frame(_), PeerState::Unverified) => {
-                        println!(
-                            "Dropping incoming packet because peer {:?} is unverified!",
-                            &addr
-                        );
-                    }
-
-                    // Add to stream/ peer list
-                    (Packet::Hello { port }, PeerState::Unverified) => {
-                        let id = peers.add_src(&addr, port).await.unwrap();
-                        let dst = peers.get_dst_by_src(&addr).await.unwrap();
-
-                        // When we have already introduced ourselves, but
-                        // the peer wasn't previously verified because we
-                        // hadn't gotten a message from them, we need to
-                        // cancel introduction and just switch to sending
-                        // a keep-alive.
-                        if socket.introduce(id, dst).await.is_none() {
-                            let mut stream = get_stream(&socket.streams, id).await;
-                            match send_packet(&mut stream, Packet::KeepAlive, &socket.id).await {
-                                Ok(_) => (),
-                                Err(e) => error!("Failed to send KeepAlive packet to newly introduced socket ID {}: {}", socket.id, e.to_string())
-                            };
-                        }
-                    }
-                    (Packet::Hello { port: _ }, PeerState::Valid) => {
-                        let id = peers.get_id_by_src(&addr).await.unwrap();
-                        let mut stream = get_stream(&socket.streams, id).await;
-                        match send_packet(&mut stream, Packet::KeepAlive, &socket.id).await {
-                            Ok(_) => (),
-                            Err(e) => error!("Failed to send KeepAlive packet to known valid socket ID {}: {}", socket.id, e.to_string())
-                        };
-                    }
-
-                    // Reply to a keep-alive with 2seconds delay
-                    (Packet::KeepAlive, _) => {
-                        let peers = Arc::clone(&peers);
-                        let id = peers.get_id_by_src(&addr).await.unwrap();
-                        let mut stream = get_stream(&socket.streams, id).await;
-                        let node_id = socket.id.clone();
-                        task::spawn(async move {
-                            task::sleep(Duration::from_secs(2)).await;
-                            println!("{} Replying to keep-alive!", node_id);
-                            match send_packet(&mut stream, Packet::KeepAlive, &node_id).await {
-                                Ok(_) => (),
-                                Err(e) => error!("Failed to reply to KeepAlive packet from socket ID {}: {}", node_id, e.to_string())
-                            };
-                        });
-                    }
-                    (packet, state) => {
-                        panic!(format!("Failed with tuple: {:?}, {:?}", packet, state))
-                    }
-                }
             }
-
-            println!("{} Exited read-work loop!", socket.id);
         }
 
-        println!("{} Exited listen loop!", socket.id);
+        let f = fb.build().unwrap();
+
+        info!("{} Full packet `{:?}` received!", socket.id, f);
+
+        // Disambiguate differente packet types
+        match (f, state) {
+            // Forward to inbox
+            (Packet::Frame(f), PeerState::Valid) => {
+                let id = peers.get_id_by_src(&src_addr).await.unwrap();
+                tx.send((f, id)).await;
+            }
+            (Packet::Frame(_), PeerState::Unverified) => {
+                // TODO: Maybe we can save these off? Although TCP should make sure they arrive in order, so meh.
+                println!(
+                    "Dropping incoming packet because peer {:?} is unverified!",
+                    &src_addr
+                );
+            }
+
+            // Add to stream/ peer list
+            (Packet::Hello { port }, PeerState::Unverified) => {
+                let id = match peers.add_src(&src_addr, port).await {
+                    Some(v) => v,
+                    None => {
+                        warn!("Hello packet recieved from an unknown peer '{}'.", src_addr);
+                        break;
+                    }
+                };
+                let dst = match peers.get_dst_by_src(&src_addr).await {
+                    Some(v) => v,
+                    None => {
+                        error!("Peer discovered by introduction '{}' has no destination address. This is not an anticipated condition. Dropping.", src_addr);
+                        break;
+                    }
+                };
+
+                // When we have already introduced ourselves, but
+                // the peer wasn't previously verified because we
+                // hadn't gotten a message from them, we need to
+                // cancel introduction and just switch to sending
+                // a keep-alive.
+                if socket.introduce(id, dst).await.is_none() {
+                    let mut stream = get_stream(&socket.streams, id).await;
+                    match send_packet(&mut stream, Packet::KeepAlive, &socket.id).await {
+                        Ok(_) => (),
+                        Err(e) => {
+                            error!(
+                                "Failed to send KeepAlive packet to newly introduced socket peer '{}' at '{}': {}",
+                                id,
+                                dst,
+                                e.to_string()
+                            );
+                            break;
+                        }
+                    };
+                }
+            }
+            (Packet::Hello { port: _ }, PeerState::Valid) => {
+                let id = peers.get_id_by_src(&src_addr).await.unwrap();
+                let mut stream = get_stream(&socket.streams, id).await;
+                match send_packet(&mut stream, Packet::KeepAlive, &socket.id).await {
+                    Ok(_) => (),
+                    Err(e) => error!(
+                        "Failed to send KeepAlive packet to known valid peer ID '{}': '{}'",
+                        id,
+                        e.to_string()
+                    ),
+                };
+            }
+
+            // Reply to a keep-alive with 2seconds delay
+            (Packet::KeepAlive, _) => {
+                let peers = Arc::clone(&peers);
+                let id = peers.get_id_by_src(&src_addr).await.unwrap();
+                let mut stream = get_stream(&socket.streams, id).await;
+                let node_id = socket.id.clone();
+                task::spawn(async move {
+                    task::sleep(Duration::from_secs(2)).await;
+                    println!("{} Replying to keep-alive!", node_id);
+                    match send_packet(&mut stream, Packet::KeepAlive, &node_id).await {
+                        Ok(_) => (),
+                        Err(e) => error!(
+                            "Failed to reply to KeepAlive packet from socket ID {}: {}",
+                            node_id,
+                            e.to_string()
+                        ),
+                    };
+                });
+            }
+            (packet, state) => panic!(format!("Failed with tuple: {:?}, {:?}", packet, state)),
+        }
     }
+    debug!("Exiting read-work loop for peer '{}' (addr '{}').", socket.id, src_addr);
 }
 
 async fn get_stream(streams: &RwLock<BTreeMap<usize, TcpStream>>, id: usize) -> TcpStream {
@@ -232,6 +306,18 @@ async fn get_stream(streams: &RwLock<BTreeMap<usize, TcpStream>>, id: usize) -> 
     s.get(&id)
         .expect(&format!("No stream for id: {}", id))
         .clone()
+}
+
+/// Check whether or not the given id is associated with an active stream.
+async fn has_stream(streams: &RwLock<BTreeMap<usize, TcpStream>>, id: usize) -> bool {
+    let s = streams.read().await;
+    s.contains_key(&id)
+}
+
+/// Return the active stream for the given ID, if one exists, removing it from the list of streams.
+async fn pull_stream(streams: &RwLock<BTreeMap<usize, TcpStream>>, id: usize) -> Option<TcpStream> {
+    let mut s = streams.write().await;
+    s.remove(&id)
 }
 
 #[tracing::instrument(skip(stream, packet), level = "debug")]
