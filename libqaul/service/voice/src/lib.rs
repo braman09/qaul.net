@@ -271,6 +271,10 @@ impl Voice {
         Ok(receiver)
     }
 
+    /// Create a new audio stream on a call
+    ///
+    /// NOTE: Currently this will error for most sample rates due to libopus. 48000 Hz is fine.
+    /// This will be fixed in the future TODO
     pub async fn create_stream(&self, user: UserAuth, call: CallId, sample_rate: u32) 
     -> Result<StreamId> {
         let id = StreamId::random();
@@ -290,6 +294,9 @@ impl Voice {
         Ok(id)
     }
 
+    /// Enqueue some audio samples to be sent over the given stream
+    ///
+    /// The stream will stall until a full frame of samples is availible
     pub async fn push_samples(&self, user: UserAuth, stream: StreamId, samples: &[f32]) -> Result<()> {
         // you were so busy figuring out if you could you never stopped to ask if you should
         self.users
@@ -308,6 +315,7 @@ impl Voice {
         Ok(())
     }
 
+    /// End an audio stream
     pub async fn end_stream(&self, user: UserAuth, stream: StreamId) -> Result<()> {
         self.users
             .read()

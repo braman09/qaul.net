@@ -429,16 +429,20 @@ pub async fn voice_worker(user: Identity, voice: Arc<Voice>) {
         let mut errored_streams = Vec::new();
         for (id, state) in streams.iter_mut() {
             let sample_count = state.sample_rate as usize / 50;
+
+            // if we don't have enough samples queued simply skip this packet
             if state.samples.len() < sample_count {
                 warn!("Stream {} doesn't have enough samples to encode", id);
                 continue;
             }
 
+            // pull off one frame of samples
             let mut samples = Vec::with_capacity(sample_count);
             for _ in 0..sample_count {
                 samples.push(state.samples.pop_front().unwrap());
             }
 
+            // encode the samples into a byte buffer
             let mut data = vec![0; 256];
             match state.encoder.lock().await.encode_float(&samples[..], &mut data) {
                 Ok(index) => { data.truncate(index); },
@@ -449,6 +453,7 @@ pub async fn voice_worker(user: Identity, voice: Arc<Voice>) {
                 },
             }
 
+            // construct the message and try to send it
             let msg = CallMessage::Data(CallData {
                 stream: *id,
                 data,
@@ -475,11 +480,12 @@ pub async fn voice_worker(user: Identity, voice: Arc<Voice>) {
                 errored_streams.push(*id);
                 continue;
             } else {
+                // if all goes well increment the sent sequence number
                 state.next_sequence_number += 1;
             }
         }
 
-        // and remove any empty subscription lists
+        // and remove any broken streams 
         for id in errored_streams.iter() {
             streams.remove(id);
         }
