@@ -11,10 +11,10 @@ use {
         users::UserAuth,
         Identity, Qaul,
     },
-    opus::Decoder,
+    opus::{Decoder, Encoder},
     serde::{Serialize, Deserialize},
     std::{
-        collections::{BTreeSet, BTreeMap},
+        collections::{BTreeSet, BTreeMap, VecDeque},
         time::Instant,
     },
 };
@@ -140,6 +140,7 @@ pub(crate) struct CallUser {
     pub(crate) call_event_subs: RwLock<BTreeMap<CallId, Vec<Sender<CallEvent>>>>,
     pub(crate) stream_subs: RwLock<BTreeMap<CallId, Vec<Sender<VoiceData>>>>,
     pub(crate) incoming_streams: RwLock<BTreeMap<StreamId, StreamState>>,
+    pub(crate) outgoing_streams: RwLock<BTreeMap<StreamId, EncoderStreamState>>,
     pub(crate) abort_handles: Vec<AbortHandle>,
 }
 
@@ -172,5 +173,13 @@ pub(crate) struct StreamState {
     /// behind a mutex because it is not `Send`
     pub(crate) decoder: Mutex<Decoder>,
     /// the sample rate of the stream's audio
+    pub(crate) sample_rate: u32,
+}
+
+pub(crate) struct EncoderStreamState {
+    pub(crate) call: CallId,
+    pub(crate) samples: VecDeque<f32>,
+    pub(crate) next_sequence_number: u32,
+    pub(crate) encoder: Mutex<Encoder>,
     pub(crate) sample_rate: u32,
 }

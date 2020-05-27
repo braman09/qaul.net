@@ -11,10 +11,10 @@ mod worker;
 pub use self::{
     error::Result,
     subs::{InvitationSubscription, CallEventSubscription, VoiceSubscription},
-    types::{Call, CallId, CallEvent, VoiceData, VoiceDataPacket},
+    types::{Call, CallId, CallEvent, VoiceData, VoiceDataPacket, StreamId},
 };
 pub(crate) use self::{
-    types::{CallMessage, CallInvitation, CallUser, StreamState},
+    types::{CallMessage, CallInvitation, CallUser, StreamState, EncoderStreamState, CallData},
 };
 use {
     async_std::{
@@ -34,9 +34,10 @@ use {
         users::UserAuth,
         Identity, Qaul,
     },
+    opus::{Encoder, Channels, Application},
     self::directory::CallDirectory,
     std::{
-        collections::{BTreeSet, BTreeMap},
+        collections::{BTreeSet, BTreeMap, VecDeque},
         sync::{Arc, Mutex as SyncMutex},
     },
 };
@@ -103,6 +104,7 @@ impl Voice {
                         call_event_subs: RwLock::new(BTreeMap::new()),
                         stream_subs: RwLock::new(BTreeMap::new()),
                         incoming_streams: RwLock::new(BTreeMap::new()),
+                        outgoing_streams: RwLock::new(BTreeMap::new()),
                         abort_handles: vec![handle_1, handle_2],
                     });
                     task::block_on(_this.users.write()).insert(user.auth.0, Arc::clone(&user));
@@ -267,5 +269,57 @@ impl Voice {
         }
 
         Ok(receiver)
+    }
+
+    pub async fn create_stream(&self, user: UserAuth, call: CallId, sample_rate: u32) 
+    -> Result<StreamId> {
+        let id = StreamId::random();
+
+        let encoder = Encoder::new(sample_rate, Channels::Mono, Application::Voip)?;
+        let encoder_state = EncoderStreamState {
+            call,
+            samples: VecDeque::new(),
+            next_sequence_number: 0,
+            encoder: Mutex::new(encoder),
+            sample_rate,
+        };
+
+        let user = self.users.read().await.get(&user.0).ok_or(QaulError::NoUser)?.clone();
+        user.outgoing_streams.write().await.insert(id, encoder_state);
+
+        Ok(id)
+    }
+
+    pub async fn push_samples(&self, user: UserAuth, stream: StreamId, samples: &[f32]) -> Result<()> {
+        // you were so busy figuring out if you could you never stopped to ask if you should
+        self.users
+            .read()
+            .await
+            .get(&user.0)
+            .ok_or(QaulError::NoUser)?
+            .clone()
+            .outgoing_streams
+            .write()
+            .await
+            .get_mut(&stream)
+            .ok_or(error::NoSuchStream(stream))?
+            .samples
+            .extend(samples);
+        Ok(())
+    }
+
+    pub async fn end_stream(&self, user: UserAuth, stream: StreamId) -> Result<()> {
+        self.users
+            .read()
+            .await
+            .get(&user.0)
+            .ok_or(QaulError::NoUser)?
+            .clone()
+            .outgoing_streams
+            .write()
+            .await
+            .remove(&stream)
+            .ok_or(error::NoSuchStream(stream))?;
+        Ok(())
     }
 }

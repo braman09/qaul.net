@@ -5,7 +5,7 @@ use {
     },
     crate::{
         ASC_NAME, Call, CallId, CallMessage, Voice, CallUser, 
-        CallEvent, StreamState, VoiceDataPacket, VoiceData,
+        CallEvent, StreamState, VoiceDataPacket, VoiceData, CallData,
     },
     conjoiner,
     futures::{
@@ -389,6 +389,8 @@ pub async fn voice_worker(user: Identity, voice: Arc<Voice>) {
             streams.remove(id);
         }
 
+        std::mem::drop(streams);
+
         // then take each stream sub and dispatch it's voice data
         let mut stream_subs = user.stream_subs.write().await;
 
@@ -417,6 +419,69 @@ pub async fn voice_worker(user: Identity, voice: Arc<Voice>) {
         // and remove any empty subscription lists
         for id in empty_calls.iter() {
             stream_subs.remove(id);
+        }
+
+        std::mem::drop(stream_subs);
+
+        // now we deal with encoding
+        let mut streams = user.outgoing_streams.write().await;
+
+        let mut errored_streams = Vec::new();
+        for (id, state) in streams.iter_mut() {
+            let sample_count = state.sample_rate as usize / 50;
+            if state.samples.len() < sample_count {
+                warn!("Stream {} doesn't have enough samples to encode", id);
+                continue;
+            }
+
+            let mut samples = Vec::with_capacity(sample_count);
+            for _ in 0..sample_count {
+                samples.push(state.samples.pop_front().unwrap());
+            }
+
+            let mut data = vec![0; 256];
+            match state.encoder.lock().await.encode_float(&samples[..], &mut data) {
+                Ok(index) => { data.truncate(index); },
+                Err(e) => {
+                    warn!("Could not encode packet for stream {}: {}", id, e);
+                    errored_streams.push(*id);
+                    continue;
+                },
+            }
+
+            let msg = CallMessage::Data(CallData {
+                stream: *id,
+                data,
+                sequence_number: state.next_sequence_number,
+                sample_rate: state.sample_rate,
+            });
+            let call = match voice.get_call(user.auth.clone(), state.call).await {
+                Ok(call) =>  call,
+                Err(_) => {
+                    warn!("Could not get call {} for stream {}", state.call, id);
+                    errored_streams.push(*id);
+                    continue;
+                },
+            };
+            let res = msg.send_to(
+                user.auth.clone(),
+                &call.participants,
+                state.call,
+                &voice.qaul,
+            ).await;
+            
+            if let Err(e) = res {
+                warn!("Failed to send audio for stream {}: {}", id, e);
+                errored_streams.push(*id);
+                continue;
+            } else {
+                state.next_sequence_number += 1;
+            }
+        }
+
+        // and remove any empty subscription lists
+        for id in errored_streams.iter() {
+            streams.remove(id);
         }
     }
 }
