@@ -1,20 +1,13 @@
-#[macro_use] extern crate tracing;
+#[macro_use]
+extern crate tracing;
 
-use {
-    async_std::future::timeout,
-    futures::stream::StreamExt,
-    libqaul::Qaul,
-    qaul_voice::{Result, Voice, CallEvent},
-    ratman_harness::{temp, Initialize, ThreePoint, millis, sec10, sec5},
-    std::{
-        collections::{BTreeSet, VecDeque},
-        fs::File,
-        io::{BufWriter, Write},
-        sync::Arc,
-    },
-    tracing::Level,
-    tracing_subscriber,
-};
+use async_std::future::timeout;
+use futures::stream::StreamExt;
+use libqaul::Qaul;
+use qaul_voice::{Result, Voice};
+use ratman_harness::{Initialize, ThreePoint};
+use std::{collections::VecDeque, sync::Arc};
+use tracing_subscriber;
 
 async fn zzz() {
     async_std::task::sleep(std::time::Duration::from_secs(1)).await;
@@ -26,11 +19,14 @@ struct VoicePair {
 }
 
 async fn init() -> ThreePoint<VoicePair> {
-    tracing_subscriber::fmt().with_env_filter("qaul_voice=trace,[]=warn").init();
+    tracing_subscriber::fmt()
+        .with_env_filter("qaul_voice=trace,[]=warn")
+        .init();
     let mut tp = ThreePoint::new().await;
     tp.init_with(|_, arc| {
         let qaul = Qaul::new(arc);
-        let voice = async_std::task::block_on(async { Voice::new(Arc::clone(&qaul)).await }).unwrap();
+        let voice =
+            async_std::task::block_on(async { Voice::new(Arc::clone(&qaul)).await }).unwrap();
         VoicePair { qaul, voice }
     });
     tp
@@ -38,10 +34,15 @@ async fn init() -> ThreePoint<VoicePair> {
 
 macro_rules! try_wait {
     ($f: expr) => {
-        timeout(std::time::Duration::from_secs(1), $f).await.unwrap()
+        timeout(std::time::Duration::from_secs(1), $f)
+            .await
+            .unwrap()
     };
 }
 
+/// This test takes a really long time so we ignore it in our usual
+/// test run (but we do run ignored tests in CI).
+#[ignore]
 #[async_std::test]
 async fn voice_call() -> Result<()> {
     let net = init().await;
@@ -51,7 +52,7 @@ async fn voice_call() -> Result<()> {
 
     warn!("Alice: {}", alice.0);
     warn!("Bob: {}", bob.0);
-    
+
     // await user propagation
     zzz().await;
 
@@ -60,10 +61,17 @@ async fn voice_call() -> Result<()> {
 
     let mut inv_sub_b = net.b().voice.subscribe_invites(bob.clone()).await?;
     net.a().voice.join_call(alice.clone(), call_id).await?;
-    net.a().voice.invite_to_call(alice.clone(), bob.0, call_id).await?;
+    net.a()
+        .voice
+        .invite_to_call(alice.clone(), bob.0, call_id)
+        .await?;
     try_wait!(inv_sub_b.next()).unwrap();
 
-    let mut event_sub_a = net.a().voice.subscribe_call_events(alice.clone(), call_id).await?;
+    let mut event_sub_a = net
+        .a()
+        .voice
+        .subscribe_call_events(alice.clone(), call_id)
+        .await?;
     net.b().voice.join_call(bob.clone(), call_id).await?;
     try_wait!(event_sub_a.next()).unwrap();
 
@@ -78,10 +86,18 @@ async fn voice_call() -> Result<()> {
         })
         .collect::<VecDeque<_>>();
 
-    let mut audio_sub_b = net.b().voice.subscribe_call_audio(bob.clone(), call_id).await?;
-    let stream_id = net.a().voice.create_stream(alice.clone(), call_id, 48000).await?;
+    let mut audio_sub_b = net
+        .b()
+        .voice
+        .subscribe_call_audio(bob.clone(), call_id)
+        .await?;
+    let stream_id = net
+        .a()
+        .voice
+        .create_stream(alice.clone(), call_id, 48000)
+        .await?;
 
-    //let mut out_file = BufWriter::new(File::create("/tmp/fuck.raw")?); 
+    //let mut out_file = BufWriter::new(File::create("/tmp/fuck.raw")?);
 
     let samples_per_frame = 48000 / 50;
     let mut frame = Vec::with_capacity(samples_per_frame);
@@ -96,13 +112,20 @@ async fn voice_call() -> Result<()> {
             frame.push(0.0);
         }
 
-        net.a().voice.push_samples(alice.clone(), stream_id, &frame).await?;
+        net.a()
+            .voice
+            .push_samples(alice.clone(), stream_id, &frame)
+            .await?;
 
         let recvd_frame = loop {
             let mut recvd_frame = try_wait!(audio_sub_b.next()).unwrap();
             match recvd_frame.remove(&stream_id) {
-                Some(rf) => { break rf; },
-                None => { continue; }, 
+                Some(rf) => {
+                    break rf;
+                }
+                None => {
+                    continue;
+                }
             }
         };
         assert_eq!(frame.len(), recvd_frame.samples.len());
