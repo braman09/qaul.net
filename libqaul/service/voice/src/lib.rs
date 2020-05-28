@@ -255,6 +255,9 @@ impl Voice {
         Ok(receiver)
     }
 
+    /// Subscribe to incoming frames of voice data
+    ///
+    /// NOTE: All incoming voice data is a 48khz until need proves otherwise or a refactor
     pub async fn subscribe_call_audio(&self, user: UserAuth, id: CallId)
     -> Result<VoiceSubscription> {
         let user = self.users.read().await.get(&user.0).ok_or(QaulError::NoUser)?.clone();
@@ -273,9 +276,6 @@ impl Voice {
     }
 
     /// Create a new audio stream on a call
-    ///
-    /// NOTE: Currently this will error for most sample rates due to libopus. 48000 Hz is fine.
-    /// This will be fixed in the future TODO
     pub async fn create_stream(&self, user: UserAuth, call: CallId, sample_rate: u32) 
     -> Result<StreamId> {
         let id = StreamId::random();
