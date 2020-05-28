@@ -262,7 +262,7 @@ impl Serialize for Tag {
     where
         S: Serializer,
     {
-        dbg!();
+        trace!("[{}:{}]", file!(), line!());
         let mut state = ser.serialize_struct("Tag", 2)?;
         state.serialize_field("key", &self.key)?;
         state.serialize_field("val", &HumanVec(self.val.clone()))?;

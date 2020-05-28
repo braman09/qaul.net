@@ -207,7 +207,7 @@ impl<'qaul> Messages<'qaul> {
         let associator = service.into();
         let id = MsgId::random();
         let tags: TagSet = tags.into();
-        println!("Sending `{}` with tags {:?}", id, tags);
+        trace!("Sending `{}` with tags {:?}", id, tags);
 
         let env = Envelope {
             id,
@@ -217,8 +217,8 @@ impl<'qaul> Messages<'qaul> {
             tags: tags.iter().cloned().collect(),
         };
 
-        println!("Sending message with ID `{:?}`", id);
-        println!("Sending message to {:?}", recipient);
+        trace!("Sending message with ID `{:?}`", id);
+        trace!("Sending message to {:?}", recipient);
 
         self.q
             .messages

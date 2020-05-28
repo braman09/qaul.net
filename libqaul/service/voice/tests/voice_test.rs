@@ -6,7 +6,7 @@ use futures::stream::StreamExt;
 use libqaul::Qaul;
 use qaul_voice::{Result, Voice};
 use ratman_harness::{Initialize, ThreePoint};
-use std::{collections::VecDeque, sync::Arc};
+use std::{collections::VecDeque, sync::Arc, io::{BufWriter, Write}, fs::File};
 use tracing_subscriber;
 
 async fn zzz() {
@@ -42,7 +42,7 @@ macro_rules! try_wait {
 
 /// This test takes a really long time so we ignore it in our usual
 /// test run (but we do run ignored tests in CI).
-#[ignore]
+#[ignored]
 #[async_std::test]
 async fn voice_call() -> Result<()> {
     let net = init().await;

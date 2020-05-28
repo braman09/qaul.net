@@ -14,6 +14,9 @@
 //! in-memory representation of data never get's out-of-sync with your
 //! on-disk representation. Don't burn your data.
 
+#[macro_use] 
+extern crate tracing;
+
 pub(crate) mod core;
 pub(crate) mod crypto;
 pub(crate) mod delta;
