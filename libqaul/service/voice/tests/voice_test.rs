@@ -97,9 +97,12 @@ async fn voice_call() -> Result<()> {
         .create_stream(alice.clone(), call_id, 48000)
         .await?;
 
-    //let mut out_file = BufWriter::new(File::create("/tmp/fuck.raw")?);
+    let mut audio_sub_b = net.b().voice.subscribe_call_audio(bob.clone(), call_id).await?;
+    let stream_id = net.a().voice.create_stream(alice.clone(), call_id, 44100).await?;
 
-    let samples_per_frame = 48000 / 50;
+    //let mut out_file = BufWriter::new(File::create("/tmp/out.raw")?); 
+
+    let samples_per_frame = 44100 / 50;
     let mut frame = Vec::with_capacity(samples_per_frame);
     while data.len() > 0 {
         frame.truncate(0);
@@ -117,18 +120,11 @@ async fn voice_call() -> Result<()> {
             .push_samples(alice.clone(), stream_id, &frame)
             .await?;
 
-        let recvd_frame = loop {
-            let mut recvd_frame = try_wait!(audio_sub_b.next()).unwrap();
-            match recvd_frame.remove(&stream_id) {
-                Some(rf) => {
-                    break rf;
-                }
-                None => {
-                    continue;
-                }
-            }
+        let mut recvd_frame = try_wait!(audio_sub_b.next()).unwrap();
+        let recvd_frame = match recvd_frame.remove(&stream_id) {
+            Some(rf) => rf,
+            None => { continue; }, 
         };
-        assert_eq!(frame.len(), recvd_frame.samples.len());
         let samples = recvd_frame.samples;
 
         //for sample in samples {

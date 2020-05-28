@@ -35,6 +35,7 @@ use {
         Identity, Qaul,
     },
     opus::{Encoder, Channels, Application},
+    rubato::{SincFixedOut, InterpolationParameters, WindowFunction, InterpolationType},
     self::directory::CallDirectory,
     std::{
         collections::{BTreeSet, BTreeMap, VecDeque},
@@ -279,13 +280,25 @@ impl Voice {
     -> Result<StreamId> {
         let id = StreamId::random();
 
-        let encoder = Encoder::new(sample_rate, Channels::Mono, Application::Voip)?;
+        let encoder = Encoder::new(48000, Channels::Mono, Application::Voip)?;
+        let resampler = SincFixedOut::new(
+            48000.0 / sample_rate as f64,
+            InterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                oversampling_factor: 128,
+                interpolation: InterpolationType::Linear,
+                window: WindowFunction::BlackmanHarris2,
+            },
+            48000 / 50,
+            1,
+        );
         let encoder_state = EncoderStreamState {
             call,
             samples: VecDeque::new(),
             next_sequence_number: 0,
             encoder: Mutex::new(encoder),
-            sample_rate,
+            resampler,
         };
 
         let user = self.users.read().await.get(&user.0).ok_or(QaulError::NoUser)?.clone();

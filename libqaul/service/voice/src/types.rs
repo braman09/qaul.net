@@ -12,6 +12,7 @@ use {
         Identity, Qaul,
     },
     opus::{Decoder, Encoder},
+    rubato::SincFixedOut,
     serde::{Serialize, Deserialize},
     std::{
         collections::{BTreeSet, BTreeMap, VecDeque},
@@ -110,7 +111,6 @@ pub(crate) struct CallData {
     pub(crate) stream: StreamId,
     pub(crate) data: Vec<u8>,
     pub(crate) sequence_number: u32,
-    pub(crate) sample_rate: u32,
 }
 
 #[derive(Eq, PartialEq, Clone, Serialize, Deserialize, Debug)]
@@ -130,8 +130,6 @@ pub struct VoiceDataPacket {
     pub user: Identity,
     /// The audio samples
     pub samples: Vec<f32>,
-    /// The audio sample rate (this should never change within a given stream)
-    pub sample_rate: u32,
 }
 
 pub(crate) struct CallUser {
@@ -172,8 +170,6 @@ pub(crate) struct StreamState {
     ///
     /// behind a mutex because it is not `Send`
     pub(crate) decoder: Mutex<Decoder>,
-    /// the sample rate of the stream's audio
-    pub(crate) sample_rate: u32,
 }
 
 pub(crate) struct EncoderStreamState {
@@ -181,5 +177,5 @@ pub(crate) struct EncoderStreamState {
     pub(crate) samples: VecDeque<f32>,
     pub(crate) next_sequence_number: u32,
     pub(crate) encoder: Mutex<Encoder>,
-    pub(crate) sample_rate: u32,
+    pub(crate) resampler: SincFixedOut<f32>,
 }

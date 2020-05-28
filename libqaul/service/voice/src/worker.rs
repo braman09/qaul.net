@@ -19,6 +19,7 @@ use {
         Identity,
     },
     opus::{Decoder, Channels},
+    rubato::Resampler,
     std::{
         collections::BTreeMap,
         sync::Arc,
@@ -204,15 +205,6 @@ pub(crate) async fn client_message_worker(user: Identity, voice: Arc<Voice>) {
                 // check if we already know about the stream it's a part of
                 let mut streams = user.incoming_streams.write().await;
                 if let Some(state) = streams.get_mut(&data.stream) {
-                    // if so check if it matches the sample rate of previous packets
-                    if state.sample_rate != data.sample_rate {
-                        warn!(
-                            "Packet recieved on stream {} using differing sample rate", 
-                            data.stream,
-                        ); 
-                        continue;
-                    }
-
                     // also check it matches the user or else someone is fucking with
                     // our audio (how rude)
                     if state.user != msg.sender {
@@ -249,7 +241,7 @@ pub(crate) async fn client_message_worker(user: Identity, voice: Arc<Voice>) {
                     state.jitter_buffer.insert(data.sequence_number, data.data);
                 } else {
                     // if we don't know about the stream try to make a new decoder for it
-                    let decoder = match Decoder::new(data.sample_rate, Channels::Mono) {
+                    let decoder = match Decoder::new(48000, Channels::Mono) {
                         Ok(decoder) => decoder,
                         Err(e) => {
                             warn!(
@@ -276,7 +268,6 @@ pub(crate) async fn client_message_worker(user: Identity, voice: Arc<Voice>) {
                         startup_timeout: Some(Instant::now() + Duration::from_millis(250)),
                         shutdown_timeout: None,
                         decoder: Mutex::new(decoder),
-                        sample_rate: data.sample_rate,
                     };
                     streams.insert(data.stream, stream);
                 }
@@ -359,7 +350,7 @@ pub async fn voice_worker(user: Identity, voice: Arc<Voice>) {
             };
 
             // next we decode the data packet
-            let mut samples = vec![0.0; state.sample_rate as usize / 50];
+            let mut samples = vec![0.0; 48000 / 50];
             match state.decoder.lock().await.decode_float(&data, &mut samples, false) {
                 Ok(index) => { samples.truncate(index); },
                 Err(e) => {
@@ -373,7 +364,6 @@ pub async fn voice_worker(user: Identity, voice: Arc<Voice>) {
             let packet = VoiceDataPacket {
                 user: state.user,
                 samples,
-                sample_rate: state.sample_rate,
             };
             if let Some(call) = voice_data.get_mut(&state.call) {
                 call.insert(*id, packet);
@@ -428,23 +418,29 @@ pub async fn voice_worker(user: Identity, voice: Arc<Voice>) {
 
         let mut errored_streams = Vec::new();
         for (id, state) in streams.iter_mut() {
-            let sample_count = state.sample_rate as usize / 50;
-
-            // if we don't have enough samples queued simply skip this packet
-            if state.samples.len() < sample_count {
+            let frames_needed = state.resampler.nbr_frames_needed();
+            if state.samples.len() < frames_needed {
                 warn!("Stream {} doesn't have enough samples to encode", id);
                 continue;
             }
 
-            // pull off one frame of samples
-            let mut samples = Vec::with_capacity(sample_count);
-            for _ in 0..sample_count {
+            let mut samples = Vec::with_capacity(frames_needed);
+            for _ in 0..frames_needed {
                 samples.push(state.samples.pop_front().unwrap());
             }
 
+            let samples = match state.resampler.process(&[samples]) {
+                Ok(samples) => samples,
+                Err(e) => {
+                    warn!("Could not resample packet for stream {}: {}", id, e);
+                    errored_streams.push(*id);
+                    continue;
+                },
+            };
+
             // encode the samples into a byte buffer
             let mut data = vec![0; 256];
-            match state.encoder.lock().await.encode_float(&samples[..], &mut data) {
+            match state.encoder.lock().await.encode_float(&samples[0][..], &mut data) {
                 Ok(index) => { data.truncate(index); },
                 Err(e) => {
                     warn!("Could not encode packet for stream {}: {}", id, e);
@@ -458,7 +454,6 @@ pub async fn voice_worker(user: Identity, voice: Arc<Voice>) {
                 stream: *id,
                 data,
                 sequence_number: state.next_sequence_number,
-                sample_rate: state.sample_rate,
             });
             let call = match voice.get_call(user.auth.clone(), state.call).await {
                 Ok(call) =>  call,
