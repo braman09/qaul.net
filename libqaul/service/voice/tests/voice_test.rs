@@ -42,8 +42,8 @@ macro_rules! try_wait {
 
 /// This test takes a really long time so we ignore it in our usual
 /// test run (but we do run ignored tests in CI).
-#[ignored]
-#[async_std::test]
+//#[ignore]
+//#[async_std::test]
 async fn voice_call() -> Result<()> {
     let net = init().await;
 
@@ -94,7 +94,7 @@ async fn voice_call() -> Result<()> {
     let stream_id = net
         .a()
         .voice
-        .create_stream(alice.clone(), call_id, 48000)
+        .create_stream(alice.clone(), call_id, 44100)
         .await?;
 
     let mut audio_sub_b = net.b().voice.subscribe_call_audio(bob.clone(), call_id).await?;
