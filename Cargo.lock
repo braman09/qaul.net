@@ -1318,7 +1318,6 @@ dependencies = [
  "libqaul",
  "qaul-chat",
  "qaul-files",
- "qaul-voice",
  "ratman",
  "ratman-harness",
  "serde",
@@ -1395,7 +1394,6 @@ dependencies = [
  "libqaul-http",
  "libqaul-rpc",
  "qaul-chat",
- "qaul-voice",
  "ratman",
  "tempfile",
 ]
